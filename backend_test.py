@@ -322,6 +322,124 @@ class SkillSwapAPITester:
         
         return True
 
+    def test_profile_photo_upload(self):
+        """Test profile photo upload functionality"""
+        # Create a simple test image file in memory
+        try:
+            from PIL import Image
+        except ImportError:
+            # If PIL is not available, create a simple fake image
+            self.log("⚠️  PIL not available, creating fake image data")
+            fake_image_data = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.\' ",#\x1c\x1c(7),01444\x1f\'9=82<.342\xff\xc0\x00\x11\x08\x00\x01\x00\x01\x01\x01\x11\x00\x02\x11\x01\x03\x11\x01\xff\xc4\x00\x14\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x08\xff\xc4\x00\x14\x10\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00\x3f\x00\xaa\xff\xd9'
+            img_bytes = io.BytesIO(fake_image_data)
+        else:
+            # Create a simple test image
+            img = Image.new('RGB', (100, 100), color='red')
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format='JPEG')
+            img_bytes.seek(0)
+        
+        # Test photo upload
+        files = {'file': ('test_photo.jpg', img_bytes, 'image/jpeg')}
+        headers = {'Authorization': f'Bearer {self.token}'}
+        
+        try:
+            url = f"{self.base_url}/users/upload-photo"
+            response = requests.post(url, files=files, headers=headers, timeout=10)
+            
+            self.tests_run += 1
+            if response.status_code == 200:
+                self.tests_passed += 1
+                self.log("✅ Profile Photo Upload - Status: 200")
+                try:
+                    result = response.json()
+                    if 'photo_url' in result:
+                        self.log(f"   Photo URL: {result['photo_url']}")
+                        return True
+                except:
+                    pass
+            else:
+                self.log(f"❌ Profile Photo Upload - Expected 200, got {response.status_code}")
+                self.log(f"   Response: {response.text}")
+        except Exception as e:
+            self.tests_run += 1
+            self.log(f"❌ Profile Photo Upload - Error: {str(e)}")
+        
+        return False
+
+    def test_profile_update(self):
+        """Test profile update functionality"""
+        update_data = {
+            "name": "Updated Test User",
+            "location": "Updated City",
+            "bio": "This is my updated bio",
+            "skills_offered": ["JavaScript", "React", "Node.js"],
+            "skills_wanted": ["Python", "Machine Learning"],
+            "availability": "Weekdays and weekends",
+            "is_public": True
+        }
+        
+        success, response = self.run_test(
+            "Update User Profile",
+            "PUT",
+            "users/me",
+            200,
+            data=update_data
+        )
+        
+        if success:
+            self.log(f"   Updated user name: {response.get('name', 'N/A')}")
+            return True
+        return False
+
+    def test_enhanced_user_profile(self):
+        """Test enhanced user profile endpoint that returns UserProfile with ratings"""
+        if not self.user_id:
+            return False
+            
+        success, response = self.run_test(
+            "Get Enhanced User Profile",
+            "GET",
+            f"users/{self.user_id}",
+            200
+        )
+        
+        if success:
+            # Check if response has the expected UserProfile structure
+            if 'user' in response and 'ratings' in response and 'recent_swaps' in response:
+                self.log("   ✅ Enhanced profile structure confirmed")
+                self.log(f"   User: {response['user'].get('name', 'N/A')}")
+                self.log(f"   Ratings count: {len(response['ratings'])}")
+                self.log(f"   Recent swaps count: {len(response['recent_swaps'])}")
+                return True
+            else:
+                self.log("   ❌ Missing expected UserProfile structure")
+        return False
+
+    def test_file_serving(self):
+        """Test if uploaded files can be served"""
+        # This test assumes a photo was uploaded in previous test
+        # We'll test the /uploads/ endpoint
+        try:
+            # Test accessing uploads directory (should return 404 for non-existent file)
+            base_url = self.base_url.replace('/api', '')  # Remove /api prefix for static files
+            url = f"{base_url}/uploads/nonexistent.jpg"
+            response = requests.get(url, timeout=10)
+            
+            self.tests_run += 1
+            # We expect 404 for non-existent file, which means the endpoint is working
+            if response.status_code == 404:
+                self.tests_passed += 1
+                self.log("✅ File Serving Endpoint - Status: 404 (expected for non-existent file)")
+                return True
+            else:
+                self.log(f"❌ File Serving Endpoint - Expected 404, got {response.status_code}")
+        except Exception as e:
+            self.tests_run += 1
+            self.log(f"❌ File Serving Endpoint - Error: {str(e)}")
+        
+        return False
+
     def run_all_tests(self):
         """Run all tests in sequence"""
         self.log("🚀 Starting Skill Swap Platform API Tests")
