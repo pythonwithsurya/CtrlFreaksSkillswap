@@ -442,7 +442,7 @@ class SkillSwapAPITester:
 
     def run_all_tests(self):
         """Run all tests in sequence"""
-        self.log("🚀 Starting Skill Swap Platform API Tests")
+        self.log("🚀 Starting Enhanced Skill Swap Platform API Tests")
         self.log(f"📡 Testing against: {self.base_url}")
         
         # Test user registration and authentication
@@ -453,6 +453,12 @@ class SkillSwapAPITester:
         if not self.test_get_current_user():
             self.log("❌ Get current user failed")
             return False
+        
+        # Test new profile features
+        self.test_profile_update()
+        self.test_profile_photo_upload()
+        self.test_enhanced_user_profile()
+        self.test_file_serving()
         
         # Test user endpoints
         self.test_get_all_users()
