@@ -320,6 +320,23 @@ class SkillSwapAPITester:
         
         self.token = original_token
         
+        # Test photo upload with non-image file
+        try:
+            files = {'file': ('test.txt', io.StringIO('not an image'), 'text/plain')}
+            headers = {'Authorization': f'Bearer {self.token}'}
+            url = f"{self.base_url}/users/upload-photo"
+            response = requests.post(url, files=files, headers=headers, timeout=10)
+            
+            self.tests_run += 1
+            if response.status_code == 400:
+                self.tests_passed += 1
+                self.log("✅ Upload Non-Image File (should fail) - Status: 400")
+            else:
+                self.log(f"❌ Upload Non-Image File - Expected 400, got {response.status_code}")
+        except Exception as e:
+            self.tests_run += 1
+            self.log(f"❌ Upload Non-Image File - Error: {str(e)}")
+        
         return True
 
     def test_profile_photo_upload(self):
