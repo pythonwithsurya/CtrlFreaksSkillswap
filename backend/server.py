@@ -1,5 +1,6 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -13,9 +14,15 @@ from datetime import datetime, timedelta
 import jwt
 import bcrypt
 from bson import ObjectId
+import base64
+import shutil
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# Create uploads directory
+UPLOAD_DIR = ROOT_DIR / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -24,6 +31,9 @@ db = client[os.environ['DB_NAME']]
 
 # Create the main app without a prefix
 app = FastAPI()
+
+# Serve static files
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -42,12 +52,15 @@ class User(BaseModel):
     email: str
     location: Optional[str] = None
     profile_photo: Optional[str] = None
+    bio: Optional[str] = None
     skills_offered: List[str] = []
     skills_wanted: List[str] = []
     availability: Optional[str] = None
     is_public: bool = True
     role: str = "user"  # "user" or "admin"
     is_banned: bool = False
+    rating_average: float = 0.0
+    total_swaps: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class UserCreate(BaseModel):
@@ -55,6 +68,7 @@ class UserCreate(BaseModel):
     email: str
     password: str
     location: Optional[str] = None
+    bio: Optional[str] = None
     skills_offered: List[str] = []
     skills_wanted: List[str] = []
     availability: Optional[str] = None
@@ -67,7 +81,7 @@ class UserLogin(BaseModel):
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     location: Optional[str] = None
-    profile_photo: Optional[str] = None
+    bio: Optional[str] = None
     skills_offered: Optional[List[str]] = None
     skills_wanted: Optional[List[str]] = None
     availability: Optional[str] = None
@@ -111,6 +125,11 @@ class RatingCreate(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+class UserProfile(BaseModel):
+    user: User
+    ratings: List[Rating] = []
+    recent_swaps: List[SwapRequest] = []
 
 # Helper functions
 def hash_password(password: str) -> str:
@@ -189,14 +208,42 @@ async def login(user_data: UserLogin):
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
+# Profile Photo Upload
+@api_router.post("/users/upload-photo")
+async def upload_profile_photo(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    # Validate file type
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    # Generate unique filename
+    file_extension = file.filename.split(".")[-1]
+    filename = f"{current_user.id}_{uuid.uuid4().hex[:8]}.{file_extension}"
+    file_path = UPLOAD_DIR / filename
+    
+    # Save file
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    # Update user profile
+    photo_url = f"/uploads/{filename}"
+    await db.users.update_one(
+        {"id": current_user.id},
+        {"$set": {"profile_photo": photo_url}}
+    )
+    
+    return {"message": "Profile photo uploaded successfully", "photo_url": photo_url}
+
 # User Routes
 @api_router.get("/users", response_model=List[User])
 async def get_users(current_user: User = Depends(get_current_user)):
     users = await db.users.find({"is_public": True, "is_banned": False}).to_list(1000)
     return [User(**user) for user in users]
 
-@api_router.get("/users/{user_id}", response_model=User)
-async def get_user(user_id: str, current_user: User = Depends(get_current_user)):
+@api_router.get("/users/{user_id}", response_model=UserProfile)
+async def get_user_profile(user_id: str, current_user: User = Depends(get_current_user)):
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -204,7 +251,22 @@ async def get_user(user_id: str, current_user: User = Depends(get_current_user))
     if not user.get("is_public", True) and user["id"] != current_user.id:
         raise HTTPException(status_code=403, detail="Profile is private")
     
-    return User(**user)
+    # Get user ratings
+    ratings = await db.ratings.find({"rated_user_id": user_id}).to_list(100)
+    
+    # Get recent swaps
+    recent_swaps = await db.swap_requests.find({
+        "$or": [
+            {"requester_id": user_id, "status": "completed"},
+            {"target_user_id": user_id, "status": "completed"}
+        ]
+    }).sort("updated_at", -1).limit(5).to_list(5)
+    
+    return UserProfile(
+        user=User(**user),
+        ratings=[Rating(**rating) for rating in ratings],
+        recent_swaps=[SwapRequest(**swap) for swap in recent_swaps]
+    )
 
 @api_router.put("/users/me", response_model=User)
 async def update_profile(user_update: UserUpdate, current_user: User = Depends(get_current_user)):
@@ -273,6 +335,17 @@ async def update_swap_request(request_id: str, update_data: SwapRequestUpdate, c
     
     await db.swap_requests.update_one({"id": request_id}, {"$set": update_dict})
     
+    # Update user stats when swap is completed
+    if update_data.status == "completed":
+        await db.users.update_one(
+            {"id": swap_request["requester_id"]},
+            {"$inc": {"total_swaps": 1}}
+        )
+        await db.users.update_one(
+            {"id": swap_request["target_user_id"]},
+            {"$inc": {"total_swaps": 1}}
+        )
+    
     updated_request = await db.swap_requests.find_one({"id": request_id})
     return SwapRequest(**updated_request)
 
@@ -318,6 +391,16 @@ async def create_rating(rating_data: RatingCreate, current_user: User = Depends(
     rating = Rating(**rating_dict)
     
     await db.ratings.insert_one(rating.dict())
+    
+    # Update user's average rating
+    all_ratings = await db.ratings.find({"rated_user_id": rating_data.rated_user_id}).to_list(1000)
+    avg_rating = sum(r["rating"] for r in all_ratings) / len(all_ratings)
+    
+    await db.users.update_one(
+        {"id": rating_data.rated_user_id},
+        {"$set": {"rating_average": round(avg_rating, 1)}}
+    )
+    
     return rating
 
 @api_router.get("/ratings/user/{user_id}")
