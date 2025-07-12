@@ -1,5 +1,5 @@
-
-About the Project
+**PROBLEM STATEMENT 1**
+**About the Project**
 
 The Skill Swap Platform is a web-based application designed to foster collaborative learning and resource exchange through a community-driven skill-sharing network. Users can list the skills they offer and those they seek to learn, enabling a mutually beneficial swapping system. The platform emphasizes user autonomy, discovery, and secure interaction, with features supporting privacy, transparency, and accountability.
 
